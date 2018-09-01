@@ -1,4 +1,4 @@
-Bolt [![Build Status](https://drone.io/github.com/boltdb/bolt/status.png)](https://drone.io/github.com/boltdb/bolt/latest) [![Coverage Status](https://coveralls.io/repos/boltdb/bolt/badge.png?branch=master)](https://coveralls.io/r/boltdb/bolt?branch=master) [![GoDoc](https://godoc.org/github.com/boltdb/bolt?status.png)](https://godoc.org/github.com/boltdb/bolt) ![Version](https://img.shields.io/badge/version-1.0-green.png)
+Bolt [![Coverage Status](https://coveralls.io/repos/boltdb/bolt/badge.svg?branch=master)](https://coveralls.io/r/boltdb/bolt?branch=master) [![GoDoc](https://godoc.org/github.com/boltdb/bolt?status.svg)](https://godoc.org/github.com/boltdb/bolt) ![Version](https://img.shields.io/badge/version-1.2.1-green.svg)
 ====
 
 Bolt is a pure Go key/value store inspired by [Howard Chu's][hyc_symas]
@@ -13,15 +13,63 @@ and setting values. That's it.
 [hyc_symas]: https://twitter.com/hyc_symas
 [lmdb]: http://symas.com/mdb/
 
-
 ## Project Status
 
-Bolt is stable and the API is fixed. Full unit test coverage and randomized
-black box testing are used to ensure database consistency and thread safety.
-Bolt is currently in high-load production environments serving databases as
-large as 1TB. Many companies such as Shopify and Heroku use Bolt-backed
-services every day.
+Bolt is stable, the API is fixed, and the file format is fixed. Full unit
+test coverage and randomized black box testing are used to ensure database
+consistency and thread safety. Bolt is currently used in high-load production
+environments serving databases as large as 1TB. Many companies such as
+Shopify and Heroku use Bolt-backed services every day.
 
+## A message from the author
+
+> The original goal of Bolt was to provide a simple pure Go key/value store and to
+> not bloat the code with extraneous features. To that end, the project has been
+> a success. However, this limited scope also means that the project is complete.
+> 
+> Maintaining an open source database requires an immense amount of time and energy.
+> Changes to the code can have unintended and sometimes catastrophic effects so
+> even simple changes require hours and hours of careful testing and validation.
+>
+> Unfortunately I no longer have the time or energy to continue this work. Bolt is
+> in a stable state and has years of successful production use. As such, I feel that
+> leaving it in its current state is the most prudent course of action.
+>
+> If you are interested in using a more featureful version of Bolt, I suggest that
+> you look at the CoreOS fork called [bbolt](https://github.com/coreos/bbolt).
+
+- Ben Johnson ([@benbjohnson](https://twitter.com/benbjohnson))
+
+## Table of Contents
+
+- [Getting Started](#getting-started)
+  - [Installing](#installing)
+  - [Opening a database](#opening-a-database)
+  - [Transactions](#transactions)
+    - [Read-write transactions](#read-write-transactions)
+    - [Read-only transactions](#read-only-transactions)
+    - [Batch read-write transactions](#batch-read-write-transactions)
+    - [Managing transactions manually](#managing-transactions-manually)
+  - [Using buckets](#using-buckets)
+  - [Using key/value pairs](#using-keyvalue-pairs)
+  - [Autoincrementing integer for the bucket](#autoincrementing-integer-for-the-bucket)
+  - [Iterating over keys](#iterating-over-keys)
+    - [Prefix scans](#prefix-scans)
+    - [Range scans](#range-scans)
+    - [ForEach()](#foreach)
+  - [Nested buckets](#nested-buckets)
+  - [Database backups](#database-backups)
+  - [Statistics](#statistics)
+  - [Read-Only Mode](#read-only-mode)
+  - [Mobile Use (iOS/Android)](#mobile-use-iosandroid)
+- [Resources](#resources)
+- [Comparison with other databases](#comparison-with-other-databases)
+  - [Postgres, MySQL, & other relational databases](#postgres-mysql--other-relational-databases)
+  - [LevelDB, RocksDB](#leveldb-rocksdb)
+  - [LMDB](#lmdb)
+- [Caveats & Limitations](#caveats--limitations)
+- [Reading the Source](#reading-the-source)
+- [Other Projects Using Bolt](#other-projects-using-bolt)
 
 ## Getting Started
 
@@ -180,7 +228,7 @@ and then safely close your transaction if an error is returned. This is the
 recommended way to use Bolt transactions.
 
 However, sometimes you may want to manually start and end your transactions.
-You can use the `Tx.Begin()` function directly but **please** be sure to close
+You can use the `DB.Begin()` function directly but **please** be sure to close
 the transaction.
 
 ```go
@@ -284,7 +332,7 @@ func (s *Store) CreateUser(u *User) error {
         // Generate ID for the user.
         // This returns an error only if the Tx is closed or not writeable.
         // That can't happen in an Update() call so I ignore the error check.
-        id, _ = b.NextSequence()
+        id, _ := b.NextSequence()
         u.ID = int(id)
 
         // Marshal user data into bytes.
@@ -309,7 +357,6 @@ type User struct {
     ID int
     ...
 }
-
 ```
 
 ### Iterating over keys
@@ -320,7 +367,9 @@ iteration over these keys extremely fast. To iterate over keys we'll use a
 
 ```go
 db.View(func(tx *bolt.Tx) error {
+	// Assume bucket exists and has keys
 	b := tx.Bucket([]byte("MyBucket"))
+
 	c := b.Cursor()
 
 	for k, v := c.First(); k != nil; k, v = c.Next() {
@@ -361,10 +410,11 @@ To iterate over a key prefix, you can combine `Seek()` and `bytes.HasPrefix()`:
 
 ```go
 db.View(func(tx *bolt.Tx) error {
+	// Assume bucket exists and has keys
 	c := tx.Bucket([]byte("MyBucket")).Cursor()
 
 	prefix := []byte("1234")
-	for k, v := c.Seek(prefix); bytes.HasPrefix(k, prefix); k, v = c.Next() {
+	for k, v := c.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = c.Next() {
 		fmt.Printf("key=%s, value=%s\n", k, v)
 	}
 
@@ -380,7 +430,7 @@ date range like this:
 
 ```go
 db.View(func(tx *bolt.Tx) error {
-	// Assume our events bucket has RFC3339 encoded time keys.
+	// Assume our events bucket exists and has RFC3339 encoded time keys.
 	c := tx.Bucket([]byte("Events")).Cursor()
 
 	// Our time range spans the 90's decade.
@@ -396,6 +446,8 @@ db.View(func(tx *bolt.Tx) error {
 })
 ```
 
+Note that, while RFC3339 is sortable, the Golang implementation of RFC3339Nano does not use a fixed number of digits after the decimal point and is therefore not sortable.
+
 
 #### ForEach()
 
@@ -404,7 +456,9 @@ all the keys in a bucket:
 
 ```go
 db.View(func(tx *bolt.Tx) error {
+	// Assume bucket exists and has keys
 	b := tx.Bucket([]byte("MyBucket"))
+
 	b.ForEach(func(k, v []byte) error {
 		fmt.Printf("key=%s, value=%s\n", k, v)
 		return nil
@@ -413,6 +467,10 @@ db.View(func(tx *bolt.Tx) error {
 })
 ```
 
+Please note that keys and values in `ForEach()` are only valid while
+the transaction is open. If you need to use a key or value outside of
+the transaction, you must use `copy()` to copy it to another byte
+slice.
 
 ### Nested buckets
 
@@ -424,6 +482,55 @@ func (*Bucket) CreateBucket(key []byte) (*Bucket, error)
 func (*Bucket) CreateBucketIfNotExists(key []byte) (*Bucket, error)
 func (*Bucket) DeleteBucket(key []byte) error
 ```
+
+Say you had a multi-tenant application where the root level bucket was the account bucket. Inside of this bucket was a sequence of accounts which themselves are buckets. And inside the sequence bucket you could have many buckets pertaining to the Account itself (Users, Notes, etc) isolating the information into logical groupings.
+
+```go
+
+// createUser creates a new user in the given account.
+func createUser(accountID int, u *User) error {
+    // Start the transaction.
+    tx, err := db.Begin(true)
+    if err != nil {
+        return err
+    }
+    defer tx.Rollback()
+
+    // Retrieve the root bucket for the account.
+    // Assume this has already been created when the account was set up.
+    root := tx.Bucket([]byte(strconv.FormatUint(accountID, 10)))
+
+    // Setup the users bucket.
+    bkt, err := root.CreateBucketIfNotExists([]byte("USERS"))
+    if err != nil {
+        return err
+    }
+
+    // Generate an ID for the new user.
+    userID, err := bkt.NextSequence()
+    if err != nil {
+        return err
+    }
+    u.ID = userID
+
+    // Marshal and save the encoded user.
+    if buf, err := json.Marshal(u); err != nil {
+        return err
+    } else if err := bkt.Put([]byte(strconv.FormatUint(u.ID, 10)), buf); err != nil {
+        return err
+    }
+
+    // Commit the transaction.
+    if err := tx.Commit(); err != nil {
+        return err
+    }
+
+    return nil
+}
+
+```
+
+
 
 
 ### Database backups
@@ -517,6 +624,84 @@ if err != nil {
 }
 ```
 
+### Mobile Use (iOS/Android)
+
+Bolt is able to run on mobile devices by leveraging the binding feature of the
+[gomobile](https://github.com/golang/mobile) tool. Create a struct that will
+contain your database logic and a reference to a `*bolt.DB` with a initializing
+constructor that takes in a filepath where the database file will be stored.
+Neither Android nor iOS require extra permissions or cleanup from using this method.
+
+```go
+func NewBoltDB(filepath string) *BoltDB {
+	db, err := bolt.Open(filepath+"/demo.db", 0600, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	return &BoltDB{db}
+}
+
+type BoltDB struct {
+	db *bolt.DB
+	...
+}
+
+func (b *BoltDB) Path() string {
+	return b.db.Path()
+}
+
+func (b *BoltDB) Close() {
+	b.db.Close()
+}
+```
+
+Database logic should be defined as methods on this wrapper struct.
+
+To initialize this struct from the native language (both platforms now sync
+their local storage to the cloud. These snippets disable that functionality for the
+database file):
+
+#### Android
+
+```java
+String path;
+if (android.os.Build.VERSION.SDK_INT >=android.os.Build.VERSION_CODES.LOLLIPOP){
+    path = getNoBackupFilesDir().getAbsolutePath();
+} else{
+    path = getFilesDir().getAbsolutePath();
+}
+Boltmobiledemo.BoltDB boltDB = Boltmobiledemo.NewBoltDB(path)
+```
+
+#### iOS
+
+```objc
+- (void)demo {
+    NSString* path = [NSSearchPathForDirectoriesInDomains(NSLibraryDirectory,
+                                                          NSUserDomainMask,
+                                                          YES) objectAtIndex:0];
+	GoBoltmobiledemoBoltDB * demo = GoBoltmobiledemoNewBoltDB(path);
+	[self addSkipBackupAttributeToItemAtPath:demo.path];
+	//Some DB Logic would go here
+	[demo close];
+}
+
+- (BOOL)addSkipBackupAttributeToItemAtPath:(NSString *) filePathString
+{
+    NSURL* URL= [NSURL fileURLWithPath: filePathString];
+    assert([[NSFileManager defaultManager] fileExistsAtPath: [URL path]]);
+
+    NSError *error = nil;
+    BOOL success = [URL setResourceValue: [NSNumber numberWithBool: YES]
+                                  forKey: NSURLIsExcludedFromBackupKey error: &error];
+    if(!success){
+        NSLog(@"Error excluding %@ from backup %@", [URL lastPathComponent], error);
+    }
+    return success;
+}
+
+```
 
 ## Resources
 
@@ -601,6 +786,9 @@ Here are a few things to note when evaluating and using Bolt:
   transaction has been committed or rolled back then the memory they point to
   can be reused by a new page or can be unmapped from virtual memory and you'll
   see an `unexpected fault address` panic when accessing it.
+
+* Bolt uses an exclusive write lock on the database file so it cannot be
+  shared by multiple processes.
 
 * Be careful when using `Bucket.FillPercent`. Setting a high fill percent for
   buckets that have random inserts will cause your database to have very poor
@@ -694,6 +882,7 @@ them via pull request.
 
 Below is a list of public, open source projects that use Bolt:
 
+* [BoltDbWeb](https://github.com/evnix/boltdbweb) - A web based GUI for BoltDB files.
 * [Operation Go: A Routine Mission](http://gocode.io) - An online programming game for Golang using Bolt for user accounts and a leaderboard.
 * [Bazil](https://bazil.org/) - A file system that lets your data reside where it is most convenient for it to reside.
 * [DVID](https://github.com/janelia-flyem/dvid) - Added Bolt as optional storage engine and testing it against Basho-tuned leveldb.
@@ -712,7 +901,6 @@ Below is a list of public, open source projects that use Bolt:
 * [cayley](https://github.com/google/cayley) - Cayley is an open-source graph database using Bolt as optional backend.
 * [bleve](http://www.blevesearch.com/) - A pure Go search engine similar to ElasticSearch that uses Bolt as the default storage backend.
 * [tentacool](https://github.com/optiflows/tentacool) - REST api server to manage system stuff (IP, DNS, Gateway...) on a linux server.
-* [SkyDB](https://github.com/skydb/sky) - Behavioral analytics database.
 * [Seaweed File System](https://github.com/chrislusf/seaweedfs) - Highly scalable distributed key~file system with O(1) disk read.
 * [InfluxDB](https://influxdata.com) - Scalable datastore for metrics, events, and real-time analytics.
 * [Freehold](http://tshannon.bitbucket.org/freehold/) - An open, secure, and lightweight platform for your files and data.
@@ -724,5 +912,24 @@ Below is a list of public, open source projects that use Bolt:
   backed by boltdb.
 * [buckets](https://github.com/joyrexus/buckets) - a bolt wrapper streamlining
   simple tx and key scans.
+* [mbuckets](https://github.com/abhigupta912/mbuckets) - A Bolt wrapper that allows easy operations on multi level (nested) buckets.
+* [Request Baskets](https://github.com/darklynx/request-baskets) - A web service to collect arbitrary HTTP requests and inspect them via REST API or simple web UI, similar to [RequestBin](http://requestb.in/) service
+* [Go Report Card](https://goreportcard.com/) - Go code quality report cards as a (free and open source) service.
+* [Boltdb Boilerplate](https://github.com/bobintornado/boltdb-boilerplate) - Boilerplate wrapper around bolt aiming to make simple calls one-liners.
+* [lru](https://github.com/crowdriff/lru) - Easy to use Bolt-backed Least-Recently-Used (LRU) read-through cache with chainable remote stores.
+* [Storm](https://github.com/asdine/storm) - Simple and powerful ORM for BoltDB.
+* [GoWebApp](https://github.com/josephspurrier/gowebapp) - A basic MVC web application in Go using BoltDB.
+* [SimpleBolt](https://github.com/xyproto/simplebolt) - A simple way to use BoltDB. Deals mainly with strings.
+* [Algernon](https://github.com/xyproto/algernon) - A HTTP/2 web server with built-in support for Lua. Uses BoltDB as the default database backend.
+* [MuLiFS](https://github.com/dankomiocevic/mulifs) - Music Library Filesystem creates a filesystem to organise your music files.
+* [GoShort](https://github.com/pankajkhairnar/goShort) - GoShort is a URL shortener written in Golang and BoltDB for persistent key/value storage and for routing it's using high performent HTTPRouter.
+* [torrent](https://github.com/anacrolix/torrent) - Full-featured BitTorrent client package and utilities in Go. BoltDB is a storage backend in development.
+* [gopherpit](https://github.com/gopherpit/gopherpit) - A web service to manage Go remote import paths with custom domains
+* [bolter](https://github.com/hasit/bolter) - Command-line app for viewing BoltDB file in your terminal.
+* [btcwallet](https://github.com/btcsuite/btcwallet) - A bitcoin wallet.
+* [dcrwallet](https://github.com/decred/dcrwallet) - A wallet for the Decred cryptocurrency.
+* [Ironsmith](https://github.com/timshannon/ironsmith) - A simple, script-driven continuous integration (build - > test -> release) tool, with no external dependencies
+* [BoltHold](https://github.com/timshannon/bolthold) - An embeddable NoSQL store for Go types built on BoltDB
+* [Ponzu CMS](https://ponzu-cms.org) - Headless CMS + automatic JSON API with auto-HTTPS, HTTP/2 Server Push, and flexible server framework.
 
 If you are using Bolt in a project please send a pull request to add it to the list.
